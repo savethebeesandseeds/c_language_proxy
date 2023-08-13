@@ -1,5 +1,5 @@
-ENV := gdb-debug
 ENV := valgrind-debug
+ENV := gdb-debug
 ENV := no-debug
 
 STATIC_FLAGS := -static # enable static

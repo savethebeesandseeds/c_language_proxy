@@ -1,57 +1,97 @@
 #ifndef __UTILS_PIAABO
 #define __UTILS_PIAABO
+#include <stdio.h>
+#include <pthread.h>
 #include <string.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <stdio.h>
+#include <errno.h>
 #include <signal.h>
 
-#define ANSI_COLOR_ERROR "\x1b[41m"
-#define ANSI_COLOR_SUCCESS "\x1b[42m"
-#define ANSI_COLOR_WARNING "\x1b[43m"
-#define ANSI_COLOR_RESET "\x1b[0m"
-#define	ANSI_COLOR_Black "\x1b[30m"
-#define	ANSI_COLOR_Red "\x1b[31m"
-#define	ANSI_COLOR_Green "\x1b[32m"
-#define	ANSI_COLOR_Yellow "\x1b[33m"
-#define	ANSI_COLOR_Blue "\x1b[34m"
-#define	ANSI_COLOR_Magenta "\x1b[35m"
-#define	ANSI_COLOR_Cyan "\x1b[36m"
-#define	ANSI_COLOR_White "\x1b[37m"
-#define	ANSI_COLOR_Bright_Black_Grey "\x1b[90m"
-#define	ANSI_COLOR_Bright_Red "\x1b[91m"
-#define	ANSI_COLOR_Bright_Green "\x1b[92m"
-#define	ANSI_COLOR_Bright_Yellow "\x1b[93m"
-#define	ANSI_COLOR_Bright_Blue "\x1b[94m"
-#define	ANSI_COLOR_Bright_Magenta "\x1b[95m"
-#define	ANSI_COLOR_Bright_Cyan "\x1b[96m"
-#define	ANSI_COLOR_Bright_White "\x1b[97m"
+#define SOCKET int
+#define socket_errno() (errno)
+
+#define LOG_FILE stdout
+#define LOG_ERR_FILE stderr
+#define LOG_WARN_FILE stdout
+
+#define ANSI_COLOR_ERROR "\x1b[41m" 
+#define ANSI_COLOR_SUCCESS "\x1b[42m" 
+#define ANSI_COLOR_WARNING "\x1b[43m" 
+#define ANSI_COLOR_RESET "\x1b[0m" 
+#define ANSI_COLOR_Black "\x1b[30m" 
+#define ANSI_COLOR_Red "\x1b[31m"     
+#define ANSI_COLOR_Green "\x1b[32m"   
+#define ANSI_COLOR_Yellow "\x1b[33m" 
+#define ANSI_COLOR_Blue "\x1b[34m"  
+#define ANSI_COLOR_Magenta "\x1b[35m" 
+#define ANSI_COLOR_Cyan "\x1b[36m"    
+#define ANSI_COLOR_White "\x1b[37m" 
+#define ANSI_COLOR_Bright_Black_Grey "\x1b[90m" 
+#define ANSI_COLOR_Bright_Red "\x1b[91m" 
+#define ANSI_COLOR_Bright_Green "\x1b[92m" 
+#define ANSI_COLOR_Bright_Yellow "\x1b[93m"     
+#define ANSI_COLOR_Bright_Blue "\x1b[94m" 
+#define ANSI_COLOR_Bright_Magenta "\x1b[95m" 
+#define ANSI_COLOR_Bright_Cyan "\x1b[96m"       
+#define ANSI_COLOR_Bright_White "\x1b[97m"
 
 pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* This log functionality checks if there is a pendding log for the error trasported by the errno.h lib, 
+ * WARNING! This functionaly sets the errno=0 if the errno is futher required, this might be not a desired behaviour.
+ */
+#define wrap_log_sys_err() {\
+  if(errno != 0) {\
+    pthread_mutex_lock(&log_mutex);\
+    fprintf(LOG_ERR_FILE,"[%s0x%lX%s]: %sSYS ERRNO%s: ",\
+      ANSI_COLOR_Cyan,pthread_self(),ANSI_COLOR_RESET,\
+      ANSI_COLOR_ERROR,ANSI_COLOR_RESET);\
+    fprintf(LOG_ERR_FILE,"%s\n", strerror(errno));\
+    fflush(LOG_ERR_FILE);\
+    pthread_mutex_unlock(&log_mutex);\
+    errno = 0;\
+  }\
+}
 /* This log functionality marks the thread id, so that log messages are linked to the request thread */
-#define log(log_file,...) {\
+#define log(...) {\
+  wrap_log_sys_err();\
   pthread_mutex_lock(&log_mutex);\
-  fprintf(log_file,"[%s0x%lX%s]: ",\
+  fprintf(LOG_FILE,"[%s0x%lX%s]: ",\
     ANSI_COLOR_Cyan,pthread_self(),ANSI_COLOR_RESET);\
-  fprintf(log_file,__VA_ARGS__);\
+  fprintf(LOG_FILE,__VA_ARGS__);\
+  fflush(LOG_FILE);\
   pthread_mutex_unlock(&log_mutex);\
 }
 /* This log functionality marks the thread id, so that log messages are linked to the request thread */
-#define log_err(log_file,...) {\
+#define log_dbg(...) {\
+  wrap_log_sys_err();\
   pthread_mutex_lock(&log_mutex);\
-  fprintf(log_file,"[%s0x%lX%s]: %sERROR%s: ",\
+  fprintf(LOG_ERR_FILE,"[%s0x%lX%s]: %sDEBUG%s: ",\
+    ANSI_COLOR_Cyan,pthread_self(),ANSI_COLOR_RESET,\
+    ANSI_COLOR_Bright_Blue,ANSI_COLOR_RESET);\
+  fprintf(LOG_ERR_FILE,__VA_ARGS__);\
+  fflush(LOG_ERR_FILE);\
+  pthread_mutex_unlock(&log_mutex);\
+}
+/* This log functionality marks the thread id, so that log messages are linked to the request thread */
+#define log_err(...) {\
+  wrap_log_sys_err();\
+  pthread_mutex_lock(&log_mutex);\
+  fprintf(LOG_ERR_FILE,"[%s0x%lX%s]: %sERROR%s: ",\
     ANSI_COLOR_Cyan,pthread_self(),ANSI_COLOR_RESET,\
     ANSI_COLOR_ERROR,ANSI_COLOR_RESET);\
-  fprintf(log_file,__VA_ARGS__);\
+  fprintf(LOG_ERR_FILE,__VA_ARGS__);\
+  fflush(LOG_ERR_FILE);\
   pthread_mutex_unlock(&log_mutex);\
 }
 /* This log functionality marks the thread id, so that log messages are linked to the request thread */
-#define log_warn(log_file,...) {\
+#define log_warn(...) {\
+  wrap_log_sys_err();\
   pthread_mutex_lock(&log_mutex);\
-  fprintf(log_file,"[%s0x%lX%s]: %sWARNING%s: ",\
+  fprintf(LOG_WARN_FILE,"[%s0x%lX%s]: %sWARNING%s: ",\
     ANSI_COLOR_Cyan,pthread_self(),ANSI_COLOR_RESET,\
     ANSI_COLOR_WARNING,ANSI_COLOR_RESET);\
-  fprintf(log_file,__VA_ARGS__);\
+  fprintf(LOG_WARN_FILE,__VA_ARGS__);\
+  fflush(LOG_WARN_FILE);\
   pthread_mutex_unlock(&log_mutex);\
 }
 /* this function prints boolean values */
@@ -60,12 +100,12 @@ pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* functionaly to abort on Crtl-C 
 *  Usage: 
       #include <signal.h>
-      signal(SIGINT,exitHandler);
+      signal(SIGINT,exitHandler); // signal from Ctrl+c
+      signal(SIGTSTP,exitHandler); // signal from Ctrl+z
 */
 void exitHandler(int signal_value){
   signal(signal_value, SIG_IGN);
-  log_warn(stdout,"SIGINT detected, Ctrl-C command detected!\n");
-  log_warn(stdout,"Ending program!\n");
+  log_warn("Abort signal detected, ending program!\n");
   exit(0);
 }
 /* functionaly to encodebase64 */

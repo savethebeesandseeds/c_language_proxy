@@ -5,7 +5,6 @@
 #include <time.h>
 #include <errno.h>
 #include <unistd.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
@@ -21,6 +20,8 @@
 
 #include "./include/util_piaabo.h"
 
+// #define C_PROXY_VERBOSE
+
 #define BUFSIZE 65536
 #define IPv4SIZE 4
 #define IPv6SIZE 16
@@ -32,7 +33,6 @@ int daemon_mode = 0;
 int auth_type;
 char *arg_username;
 char *arg_password;
-FILE *log_file;
 pthread_mutex_t lock;
 
 enum socks {
@@ -74,25 +74,19 @@ void log_message(const char *message, ...)
     return;
   }
 
-  char vbuffer[255];
+  char vbuffer[2048];
   va_list args;
   va_start(args, message);
   vsnprintf(vbuffer, ARRAY_SIZE(vbuffer), message, args);
   va_end(args);
 
-  time_t now;
-  time(&now);
-  char *date = ctime(&now);
-  date[strlen(date) - 1] = '\0';
+  // time_t now;
+  // time(&now);
+  // char *date = ctime(&now);
+  // date[strlen(date) - 1] = '\0';
 
-  if (errno != 0) {
-    log_err(log_file, "[%s]: %s - %s\n", date,
-      vbuffer, strerror(errno));
-    errno = 0;
-  } else {
-    log(log_file, "[%s]: %s\n", date, vbuffer);
-  }
-  fflush(log_file);
+  wrap_log_sys_err();
+  log( "%s\n", vbuffer);
 }
 
 int readn(int fd, void *buf, int n)
@@ -137,6 +131,11 @@ int writen(int fd, void *buf, int n)
 
 void app_thread_exit(int ret, int fd)
 {
+  if(ret){
+    log_message("%s··· ··· ··· ··· ··· ··· ··· END ON FAILURE %s",ANSI_COLOR_Bright_Red,ANSI_COLOR_RESET);
+  } else {
+    log_message("%s··· ··· ··· ··· ··· ··· ··· END %s",ANSI_COLOR_Bright_Green,ANSI_COLOR_RESET);
+  }
   close(fd);
   pthread_exit((void *)&ret);
 }
@@ -171,13 +170,13 @@ int app_connect(int type, void *buf, unsigned short int portnum)
     return fd;
   } else if (type == DOMAIN) {
     char portaddr[6];
-    struct addrinfo *res;
+    struct addrinfo *res=NULL;
     snprintf(portaddr, ARRAY_SIZE(portaddr), "%d", portnum);
-    log_message("getaddrinfo: %s %s", (char *)buf, portaddr);
-    int ret = getaddrinfo((char *)buf, portaddr, NULL, &res);
-    if (ret == EAI_NODATA) {
-      return -1;
-    } else if (ret == 0) {
+    int addr_ret = getaddrinfo((char *)buf, portaddr, NULL, &res); // usual error codes get set here
+    if(errno != 0)
+      log_message("getaddrinfo");
+    if (addr_ret == 0) {
+      log_message("Address info : <%s> %s", (char *)buf, portaddr);
       struct addrinfo *r;
       for (r = res; r != NULL; r = r->ai_next) {
         fd = socket(r->ai_family, r->ai_socktype,
@@ -185,20 +184,20 @@ int app_connect(int type, void *buf, unsigned short int portnum)
         if (fd == -1) {
             continue;
         }
-        ret = connect(fd, r->ai_addr, r->ai_addrlen);
-        if (ret == 0) {
+        addr_ret = connect(fd, r->ai_addr, r->ai_addrlen);
+        if (addr_ret == 0) {
           freeaddrinfo(res);
           return fd;
         } else {
-            close(fd);
+          close(fd);
         }
       }
+    } else {
+      log_err("Address info : [%s]\n", gai_strerror(addr_ret));
     }
     freeaddrinfo(res);
     return -1;
   } else if (type == IPv6) {
-    log(stdout,"waka 0\n");
-    
     char *ip = (char *)buf;
     struct sockaddr_in6 remote;
 
@@ -217,7 +216,6 @@ int app_connect(int type, void *buf, unsigned short int portnum)
 
     fd = socket(AF_INET6, SOCK_STREAM, 0);
     if (connect(fd, (struct sockaddr_in6 *)&remote, sizeof(remote)) < 0) {
-      log(stdout,"waka 3.a\n");
       log_message("connect() ipv6 in app_connect");
       close(fd);
       return -1;
@@ -225,7 +223,7 @@ int app_connect(int type, void *buf, unsigned short int portnum)
 
     return fd;
   } else {
-    log_warn(log_file,"Address Type [%d] not recognized. Refusing connection.\n",type);
+    log_warn("Address Type [%d] not recognized. Refusing connection.\n",type);
   }
 
   return -1;
@@ -236,11 +234,11 @@ int socks_invitation(int fd, int *version)
   char init[2];
   int nread = readn(fd, (void *)init, ARRAY_SIZE(init));
   if (nread == 2 && init[0] != VERSION5 && init[0] != VERSION4) {
-    log_message("They send us %hhX %hhX", init[0], init[1]);
+    log_message("They send us 0x%hhX 0x%hhX", init[0], init[1]);
     log_message("Incompatible version!");
     app_thread_exit(0, fd);
   }
-  log_message("Initial %hhX %hhX", init[0], init[1]);
+  log_message("Initial 0x%hhX 0x%hhX", init[0], init[1]);
   *version = init[0];
   return init[1];
 }
@@ -275,7 +273,7 @@ int socks5_auth_userpass(int fd)
   writen(fd, (void *)answer, ARRAY_SIZE(answer));
   char resp;
   readn(fd, (void *)&resp, sizeof(resp));
-  log_message("auth %hhX", resp);
+  log_message("auth 0x%hhX", resp);
   char *username = socks5_auth_get_user(fd);
   char *password = socks5_auth_get_pass(fd);
   log_message("l: %s p: %s", username, password);
@@ -304,6 +302,7 @@ int socks5_auth_noauth(int fd)
 
 void socks5_auth_notsupported(int fd)
 {
+  log_err( "socks5_auth_notsupported.\n");
   char answer[2] = { VERSION5, NOMETHOD };
   writen(fd, (void *)answer, ARRAY_SIZE(answer));
 }
@@ -315,7 +314,7 @@ void socks5_auth(int fd, int methods_count)
   for (int i = 0; i < num; i++) {
     char type;
     readn(fd, (void *)&type, 1);
-    log_message("Method AUTH %hhX", type);
+    log_message("Method AUTH 0x%hhX", type);
     if (type == auth_type) {
       supported = 1;
     }
@@ -336,6 +335,7 @@ void socks5_auth(int fd, int methods_count)
   if (ret == 0) {
     return;
   } else {
+    log_message("Unauthorized");
     app_thread_exit(1, fd);
   }
 }
@@ -344,8 +344,8 @@ int socks5_command(int fd)
 {
   char command[4];
   readn(fd, (void *)command, ARRAY_SIZE(command));
-  log_message("Command %hhX %hhX %hhX %hhX", command[0], command[1],
-        command[2], command[3]);
+  log_message("Command 0x%hhX 0x%hhX 0x%hhX 0x%hhX", 
+    command[0], command[1], command[2], command[3]);
   return command[3];
 }
 
@@ -432,7 +432,6 @@ int socks4_read_nstring(int fd, char *buf, int size)
       buf[i] = sym;
       i++;
     }
-
     if (sym == 0) {
       break;
     }
@@ -463,21 +462,32 @@ void app_socket_pipe(int fd0, int fd1)
     FD_SET(fd1, &rd_set);
     ret = select(maxfd + 1, &rd_set, NULL, NULL, NULL);
 
-    if (ret < 0 && errno == EINTR) {
+    if (ret < 0 && errno == EINTR)
       continue;
-    }
+    
+    log_message("%s··· ··· ··· ··· ··· ··· ··· %s", ANSI_COLOR_Bright_Yellow, ANSI_COLOR_RESET);
 
-    if (FD_ISSET(fd0, &rd_set)) {
+    if (FD_ISSET(fd0, &rd_set)) { /* received payload, what the server sends to the client */
       nread = recv(fd0, buffer_r, BUFSIZE, 0);
-      if (nread <= 0)
+      if (nread <= 0){
+        log_message("%s··· ··· ··· ··· ··· ··· ··· break by server %s", ANSI_COLOR_Bright_Yellow, ANSI_COLOR_RESET);  
         break;
+      }
+      #ifdef C_PROXY_VERBOSE
+      log(stdout,"buffer_r[fd0] (received payload):%s\n",buffer_r);
+      #endif
       send(fd1, (const void *)buffer_r, nread, 0);
     }
 
-    if (FD_ISSET(fd1, &rd_set)) {
+    if (FD_ISSET(fd1, &rd_set)) { /* sended payload, what the client sends to the server */
       nread = recv(fd1, buffer_r, BUFSIZE, 0);
-      if (nread <= 0)
+      if (nread <= 0){
+        log_message("%s··· ··· ··· ··· ··· ··· ··· break by client %s", ANSI_COLOR_Bright_Yellow, ANSI_COLOR_RESET);  
         break;
+      }
+      #ifdef C_PROXY_VERBOSE
+      log(stdout,"buffer_r[fd1] (sended payload):%s\n",buffer_r);
+      #endif
       send(fd0, (const void *)buffer_r, nread, 0);
     }
   }
@@ -485,6 +495,7 @@ void app_socket_pipe(int fd0, int fd1)
 
 void *app_thread_process(void *fd)
 {
+  log_message("%s··· ··· ··· ··· ··· ··· ··· START %s",ANSI_COLOR_Bright_Green,ANSI_COLOR_RESET);
   int net_fd = *(int *)fd;
   int version = 0;
   int inet_fd = -1;
@@ -494,43 +505,48 @@ void *app_thread_process(void *fd)
   case VERSION5: {
     socks5_auth(net_fd, methods);
     int command = socks5_command(net_fd);
-
     if (command == IPv4) {
+      log_message("ATYP:[IPv4]",command);
       char *ip = socks_ipv4_read(net_fd);
       unsigned short int p = socks_read_port(net_fd);
 
       inet_fd = app_connect(IPv4, (void *)ip, ntohs(p));
       if (inet_fd == -1) {
+        free(ip);
         app_thread_exit(1, net_fd);
       }
       socks5_ipv4_send_response(net_fd, ip, p);
       free(ip);
       break;
     } else if (command == DOMAIN) {
+      log_message("ATYP:[DOMAINNAME]",command);
       unsigned char size;
       char *address = socks5_domain_read(net_fd, &size);
       unsigned short int p = socks_read_port(net_fd);
 
       inet_fd = app_connect(DOMAIN, (void *)address, ntohs(p));
       if (inet_fd == -1) {
+        free(address);
         app_thread_exit(1, net_fd);
       }
       socks5_domain_send_response(net_fd, address, size, p);
       free(address);
       break;
     } else if (command == IPv6) {
+      log_message("ATYP:[IPv6]",command);
       char *ip = socks_ipv6_read(net_fd);
       unsigned short int p = socks_read_port(net_fd);
 
       inet_fd = app_connect(IPv6, (void *)ip, ntohs(p));
       if (inet_fd == -1) {
+        free(ip);
         app_thread_exit(1, net_fd);
       }
       socks5_ipv4_send_response(net_fd, ip, p);
       free(ip);
       break;
     } else {
-      log_warn(log_file,"Address Type [%d] not recognized. Refusing connection.\n",command);
+      log_err("Socks5, ATYP:[0x%hhX] not recognized. Refusing connection.\n", command);
       app_thread_exit(1, net_fd);
     }
   }
@@ -561,10 +577,14 @@ void *app_thread_process(void *fd)
 
       free(ip);
     } else {
-        log_message("Unsupported mode");
+      log_message("Socks4 Unsupported mode");
     }
     break;
-    }
+  }
+  default: {
+    log_err("Not supported Socks[%d] version\n",version);
+    break;
+  }
   }
 
   app_socket_pipe(inet_fd, net_fd);
@@ -580,6 +600,7 @@ int app_loop()
   int optval = 1;
   struct sockaddr_in local, remote;
   socklen_t remotelen;
+  
   if ((sock_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     log_message("exit due to, socket()");
     exit(1);
@@ -610,24 +631,21 @@ int app_loop()
   remotelen = sizeof(remote);
   memset(&remote, 0, sizeof(remote));
 
-  log_message("exit due to, Listening port %d...", port);
+  log_message("Listening port %d ...", port);
 
   pthread_t worker;
   while (1) {
-    if ((net_fd =
-        accept(sock_fd, (struct sockaddr *)&remote,
-        &remotelen)) < 0) {
+    if ((net_fd = accept(sock_fd, (struct sockaddr *)&remote,&remotelen)) < 0) {
       log_message("exit due to, accept()");
       exit(1);
     }
     int one = 1;
     setsockopt(sock_fd, SOL_TCP, TCP_NODELAY, &one, sizeof(one));
-    if (pthread_create
-        (&worker, NULL, &app_thread_process,
-        (void *)&net_fd) == 0) {
-      pthread_detach(worker);
+    if (pthread_create(
+      &worker, NULL, &app_thread_process, (void *)&net_fd) == 0) {
+        pthread_detach(worker);
     } else {
-      log_message("exit due to, pthread_create()");
+      log_message("Unable to pthread_create()");
     }
   }
 }
@@ -639,59 +657,50 @@ void daemonize()
 
   pid = fork();
 
-  if (pid < 0) {
+  if (pid < 0)
     exit(EXIT_FAILURE);
-  }
-
-  if (pid > 0) {
+  if (pid > 0)
     exit(EXIT_SUCCESS);
-  }
-
-  if (setsid() < 0) {
+  if (setsid() < 0)
     exit(EXIT_FAILURE);
-  }
 
   signal(SIGCHLD, SIG_IGN);
   signal(SIGHUP, SIG_IGN);
 
   pid = fork();
 
-  if (pid < 0) {
+  if (pid < 0)
     exit(EXIT_FAILURE);
-  }
-
-  if (pid > 0) {
+  if (pid > 0)
     exit(EXIT_SUCCESS);
-  }
 
   umask(0);
   chdir("/");
 
-  for (x = sysconf(_SC_OPEN_MAX); x >= 0; x--) {
+  for (x = sysconf(_SC_OPEN_MAX); x >= 0; x--)
     close(x);
-  }
 }
 void usage(char *app)
 {
-  printf
-    ("USAGE: %s [-h][-n PORT][-a AUTHTYPE][-u USERNAME][-p PASSWORD][-l LOGFILE]\n",
+  fprintf
+    (stdout,"USAGE: %s [-h][-n PORT][-a AUTHTYPE][-u USERNAME][-p PASSWORD][-l LOGFILE]\n",
     app);
-  printf("AUTHTYPE: 0 for NOAUTH, 2 for USERPASS\n");
-  printf
-    ("By default: port is 1080, authtype is no auth, logfile is stdout\n");
+  fprintf(stdout,"AUTHTYPE: 0 for NOAUTH, 2 for USERPASS\n");
+  fprintf
+    (stdout,"By default: port is 1080, authtype is no auth, logfile is stdout\n");
   exit(1);
 }
 
 int main(int argc, char *argv[])
 {
   int ret;
-  log_file = stdout;
   auth_type = NOAUTH;
   arg_username = "user";
   arg_password = "pass";
 
   signal(SIGPIPE, SIG_IGN);
-  signal(SIGINT, exitHandler);
+  signal(SIGINT, exitHandler); // Ctrl+c
+  signal(SIGTSTP, exitHandler); // Ctrl+z
 
   while ((ret = getopt(argc, argv, "n:u:p:l:a:hd")) != -1) {
     switch (ret) {
@@ -712,10 +721,6 @@ int main(int argc, char *argv[])
       arg_password = strdup(optarg);
       break;
     }
-    case 'l':{
-      freopen(optarg, "wa", log_file);
-      break;
-    }
     case 'a':{
       auth_type = atoi(optarg);
       break;
@@ -726,10 +731,9 @@ int main(int argc, char *argv[])
     }
   }
   log_message("Starting with authtype %X", auth_type);
-  if (auth_type != NOAUTH) {
-    log_message("Username is %s, password is %s", arg_username,
-      arg_password);
-  }
+  if (auth_type != NOAUTH)
+    log_message("Username is %s, password is %s", 
+      arg_username, arg_password);
   app_loop();
   return 0;
 }
